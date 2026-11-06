@@ -9,7 +9,7 @@ use std::process::{self, Command, Stdio};
 
 use crossterm::cursor::{MoveToColumn, MoveUp};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use crossterm::style::Print;
+use crossterm::style::{Print, PrintStyledContent, ResetColor, Stylize};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use crossterm::queue;
 use tempfile::NamedTempFile;
@@ -493,30 +493,93 @@ fn paint_picker_lines(
     }
     queue!(out, MoveToColumn(0))?;
 
-    paint_picker_row(out, "Select proxy route:")?;
-    paint_picker_row(out, "")?;
+    paint_picker_title_row(out)?;
+    paint_picker_blank_row(out)?;
 
     for (i, route) in routes.iter().enumerate() {
-        let prefix = if i == selected { "> " } else { "  " };
-        let row = match &route.label {
-            Some(name) => format!("{prefix}{name} - 127.0.0.1:{}", route.port),
-            None => format!("{prefix}127.0.0.1:{}", route.port),
-        };
-        paint_picker_row(out, &row)?;
+        paint_picker_route_row(out, route, i == selected)?;
     }
 
-    paint_picker_row(out, "↑/↓: move  Enter: confirm  Esc: cancel")?;
+    paint_picker_hint_row(out)?;
     out.flush()?;
     Ok(())
 }
 
-fn paint_picker_row(out: &mut impl Write, s: &str) -> io::Result<()> {
+fn paint_picker_title_row(out: &mut impl Write) -> io::Result<()> {
     queue!(
         out,
         MoveToColumn(0),
         Clear(ClearType::UntilNewLine),
-        Print(s),
+        PrintStyledContent(" proxypilot ".on_cyan().white().bold()),
+        Print(" "),
+        PrintStyledContent("Select proxy route".cyan().bold()),
+        ResetColor,
         Print("\r\n"),
-    )?;
+    )
+}
+
+fn paint_picker_blank_row(out: &mut impl Write) -> io::Result<()> {
+    queue!(
+        out,
+        MoveToColumn(0),
+        Clear(ClearType::UntilNewLine),
+        Print("\r\n"),
+    )
+}
+
+fn paint_picker_route_row(out: &mut impl Write, route: &PortRoute, is_selected: bool) -> io::Result<()> {
+    queue!(out, MoveToColumn(0), Clear(ClearType::UntilNewLine))?;
+    if is_selected {
+        queue!(out, PrintStyledContent("> ".green().bold()))?;
+        if let Some(name) = &route.label {
+            queue!(
+                out,
+                PrintStyledContent(name.as_str().white().bold()),
+                PrintStyledContent(" - ".dark_grey()),
+                PrintStyledContent(
+                    format!("127.0.0.1:{}", route.port)
+                        .yellow()
+                        .bold(),
+                ),
+            )?;
+        } else {
+            queue!(out, PrintStyledContent(
+                format!("127.0.0.1:{}", route.port)
+                    .yellow()
+                    .bold(),
+            ))?;
+        }
+    } else {
+        queue!(out, PrintStyledContent("  ".dark_grey()))?;
+        if let Some(name) = &route.label {
+            queue!(
+                out,
+                PrintStyledContent(name.as_str().grey()),
+                PrintStyledContent(" - ".dark_grey()),
+                PrintStyledContent(format!("127.0.0.1:{}", route.port).dark_yellow()),
+            )?;
+        } else {
+            queue!(out, PrintStyledContent(
+                format!("127.0.0.1:{}", route.port).dark_yellow(),
+            ))?;
+        }
+    }
+    queue!(out, ResetColor, Print("\r\n"))?;
     Ok(())
+}
+
+fn paint_picker_hint_row(out: &mut impl Write) -> io::Result<()> {
+    queue!(
+        out,
+        MoveToColumn(0),
+        Clear(ClearType::UntilNewLine),
+        PrintStyledContent("↑/↓".cyan()),
+        PrintStyledContent(": move  ".dark_grey()),
+        PrintStyledContent("Enter".green()),
+        PrintStyledContent(": confirm  ".dark_grey()),
+        PrintStyledContent("Esc".yellow()),
+        PrintStyledContent(": cancel".dark_grey()),
+        ResetColor,
+        Print("\r\n"),
+    )
 }

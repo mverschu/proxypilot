@@ -46,7 +46,7 @@ OfficeNetwork:1080
 - **Port only** (`1080`) — no label; the picker shows `127.0.0.1:1080`.
 - **Label and port** (`Name:1080` or `[Name]:1080`) — optional human-readable name for the TUI only; proxychains still uses `127.0.0.1` and that port. Use brackets if the label contains `:`.
 - **One route** → that port is used automatically (label is ignored unless you add more lines later).
-- **Several routes** → arrow keys (↑/↓ or `j`/`k`) to move, **Enter** to confirm, **Esc** to cancel.
+- **Several routes** → arrow keys (↑/↓ or `j`/`k`) to move, **Enter** to confirm, **Esc** to cancel. The list is **colorized** on ANSI terminals (cyan header, green caret on the selected row).
 
 ## Build
 
