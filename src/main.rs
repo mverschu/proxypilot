@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, stdin, stdout, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
+use std::thread;
 
 use crossterm::cursor::{MoveToColumn, MoveUp};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -86,25 +87,70 @@ fn main() {
     };
 
     let mut cmd = Command::new(&proxychains);
-    cmd.stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
+    cmd.stdin(Stdio::inherit()).stdout(Stdio::inherit());
+    // Hide noisy proxychains-ng bootstrap lines on stderr; forward the rest (wrapped tool).
+    let show_pc_debug = env::var("PROXYPILOT_SHOW_PROXYCHAINS_DEBUG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if show_pc_debug {
+        cmd.stderr(Stdio::inherit());
+    } else {
+        cmd.stderr(Stdio::piped());
+    }
     // `-f` and the config path must come *before* the wrapped command (e.g. nxc), or the child gets them as its own argv.
     apply_proxychains_config(&mut cmd, &proxychains, &path);
     cmd.args(&args);
 
-    let status = cmd.status();
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("proxypilot: failed to run {}: {e}", proxychains.display());
+            process::exit(1);
+        }
+    };
+
+    let stderr_handle = if !show_pc_debug {
+        child.stderr.take().map(|stderr| {
+            thread::spawn(move || filter_proxychains_stderr(stderr))
+        })
+    } else {
+        None
+    };
+
+    let status = child.wait();
 
     // Deletes the tempfile when dropped.
     drop(temp_config);
+
+    if let Some(h) = stderr_handle {
+        let _ = h.join();
+    }
 
     match status {
         Ok(s) => {
             process::exit(s.code().unwrap_or(1));
         }
         Err(e) => {
-            eprintln!("proxypilot: failed to run {}: {e}", proxychains.display());
+            eprintln!("proxypilot: wait on {} failed: {e}", proxychains.display());
             process::exit(1);
+        }
+    }
+}
+
+/// Forwards stderr but drops lines that start with `[proxychains]` (LD_PRELOAD noise).
+fn filter_proxychains_stderr(stderr: impl Read + Send + 'static) {
+    let mut reader = std::io::BufReader::new(stderr);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                if !line.trim_start().starts_with("[proxychains]") {
+                    let _ = write!(io::stderr(), "{line}");
+                }
+            }
+            Err(_) => break,
         }
     }
 }

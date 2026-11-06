@@ -16,6 +16,12 @@ export PROXYCHAINS_BIN=/usr/bin/proxychains4
 
 All arguments after `proxypilot` are forwarded unchanged. The child process’s exit code is returned. The temporary file is removed after the command finishes; nothing under `/etc/proxychains.conf` is modified.
 
+By default, **proxychains-ng bootstrap lines** on stderr (`[proxychains] config file found`, `preloading`, `DLL init`, …) are **hidden** so only your tool’s output shows. To show them again (debugging):
+
+```bash
+export PROXYPILOT_SHOW_PROXYCHAINS_DEBUG=1
+```
+
 ## Config file
 
 Default path: `$XDG_CONFIG_HOME/proxypilot/ports`, or `~/.config/proxypilot/ports` if `XDG_CONFIG_HOME` is unset.
