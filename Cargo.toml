@@ -1,0 +1,14 @@
+[package]
+name = "proxypilot"
+version = "0.1.0"
+edition = "2021"
+description = "Wrapper around proxychains4: pick a SOCKS port and forward a command (e.g. nxc) through it"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "proxypilot"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = "0.28"
+tempfile = "3"
