@@ -1,5 +1,7 @@
 # proxypilot
 
+<img width="2172" height="724" alt="image" src="https://github.com/user-attachments/assets/0f30eccb-424c-4212-82ae-07554a508f9c" />
+
 Runs any command through **proxychains-ng** using a local SOCKS port from a small config file (optional picker when you have more than one port).
 
 **You need `proxychains4` on your system** (the proxychains-ng package). Other deps: whatever command you wrap (e.g. `nxc`).
