@@ -485,8 +485,8 @@ fn paint_picker_lines(
     selected: usize,
     move_up: bool,
 ) -> io::Result<()> {
-    // From the hint line, move up past title + blank + routes = routes.len() + 2 lines.
-    let lines_above_hint = routes.len().saturating_add(2);
+    // Cursor is on the line *below* the hint. Move up past hint + routes + blank + title.
+    let lines_above_hint = routes.len().saturating_add(3);
     let up_by: u16 = lines_above_hint.try_into().unwrap_or(u16::MAX);
     if move_up {
         queue!(out, MoveUp(up_by))?;
