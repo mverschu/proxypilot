@@ -18,15 +18,19 @@ Override with:
 export PROXYPILOT_CONFIG=/path/to/ports
 ```
 
-File format: one port per line (empty lines and `#` comments allowed):
+File format: one route per line (empty lines and `#` comments allowed):
 
 ```text
 1080
 1081
+OfficeNetwork:1080
+[Home VPN]:1081
 ```
 
-- **One port** → used automatically.
-- **Several ports** → arrow keys (↑/↓ or `j`/`k`) to move, **Enter** to confirm, **Esc** to cancel.
+- **Port only** (`1080`) — no label; the picker shows `127.0.0.1:1080`.
+- **Label and port** (`Name:1080` or `[Name]:1080`) — optional human-readable name for the TUI only; proxychains still uses `127.0.0.1` and that port. Use brackets if the label contains `:`.
+- **One route** → that port is used automatically (label is ignored unless you add more lines later).
+- **Several routes** → arrow keys (↑/↓ or `j`/`k`) to move, **Enter** to confirm, **Esc** to cancel.
 
 ## Build
 

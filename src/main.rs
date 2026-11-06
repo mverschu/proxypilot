@@ -17,6 +17,12 @@ use crossterm::terminal::{
 use crossterm::{execute, queue};
 use tempfile::NamedTempFile;
 
+/// One SOCKS route from the config file (port plus optional display label).
+struct PortRoute {
+    port: u16,
+    label: Option<String>,
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
@@ -33,7 +39,7 @@ fn main() {
         }
     };
 
-    let ports = match load_ports(&config_path) {
+    let routes = match load_routes(&config_path) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("proxypilot: {e}");
@@ -41,14 +47,14 @@ fn main() {
         }
     };
 
-    if ports.is_empty() {
+    if routes.is_empty() {
         eprintln!("proxypilot: no valid ports in {}", config_path.display());
         process::exit(2);
     }
 
-    let port = match ports.len() {
-        1 => ports[0],
-        _ => match select_port_tui(&ports) {
+    let port = match routes.len() {
+        1 => routes[0].port,
+        _ => match select_port_tui(&routes) {
             Ok(Some(p)) => p,
             Ok(None) => process::exit(130), // cancelled (Esc)
             Err(e) => {
@@ -103,7 +109,7 @@ fn resolve_config_path() -> Result<PathBuf, String> {
     Ok(config_home.join("proxypilot").join("ports"))
 }
 
-fn load_ports(path: &Path) -> Result<Vec<u16>, String> {
+fn load_routes(path: &Path) -> Result<Vec<PortRoute>, String> {
     let content = fs::read_to_string(path).map_err(|e| {
         format!(
             "cannot read config {}: {e}",
@@ -111,18 +117,50 @@ fn load_ports(path: &Path) -> Result<Vec<u16>, String> {
         )
     })?;
 
-    let mut ports = Vec::new();
+    let mut routes = Vec::new();
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let port: u16 = line
-            .parse()
-            .map_err(|_| format!("invalid port line in {}: {line:?}", path.display()))?;
-        ports.push(port);
+        let route = parse_port_line(line).map_err(|msg| {
+            format!("invalid line in {}: {msg} ({line:?})", path.display())
+        })?;
+        routes.push(route);
     }
-    Ok(ports)
+    Ok(routes)
+}
+
+/// Parses `1080`, `Name:1080`, or `[Name]:1080`. Label is optional and shown in the TUI only.
+fn parse_port_line(line: &str) -> Result<PortRoute, String> {
+    if let Some((label_part, port_str)) = line.rsplit_once(':') {
+        if port_str.chars().all(|c| c.is_ascii_digit()) && !port_str.is_empty() {
+            let port: u16 = port_str
+                .parse()
+                .map_err(|_| "invalid port number".to_string())?;
+            let label = normalize_label(label_part.trim());
+            return Ok(PortRoute {
+                port,
+                label: if label.is_empty() { None } else { Some(label) },
+            });
+        }
+    }
+    let port: u16 = line
+        .parse()
+        .map_err(|_| "expected a port (e.g. 1080) or label:port (e.g. [Office]:1080)".to_string())?;
+    Ok(PortRoute {
+        port,
+        label: None,
+    })
+}
+
+fn normalize_label(s: &str) -> String {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('[') && s.ends_with(']') {
+        s[1..s.len() - 1].trim().to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 fn write_proxychains_config(port: u16) -> io::Result<NamedTempFile> {
@@ -146,7 +184,7 @@ socks5 127.0.0.1 {port}
     Ok(f)
 }
 
-fn select_port_tui(ports: &[u16]) -> io::Result<Option<u16>> {
+fn select_port_tui(routes: &[PortRoute]) -> io::Result<Option<u16>> {
     let mut selected: usize = 0;
 
     enable_raw_mode()?;
@@ -158,7 +196,7 @@ fn select_port_tui(ports: &[u16]) -> io::Result<Option<u16>> {
 
     let result = (|| -> io::Result<Option<u16>> {
         loop {
-            draw_selection(&mut out, ports, selected)?;
+            draw_selection(&mut out, routes, selected)?;
 
             if !event::poll(std::time::Duration::from_millis(250))? {
                 continue;
@@ -166,14 +204,14 @@ fn select_port_tui(ports: &[u16]) -> io::Result<Option<u16>> {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                     KeyCode::Esc => return Ok(None),
-                    KeyCode::Enter => return Ok(Some(ports[selected])),
+                    KeyCode::Enter => return Ok(Some(routes[selected].port)),
                     KeyCode::Up | KeyCode::Char('k') => {
                         if selected > 0 {
                             selected -= 1;
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if selected + 1 < ports.len() {
+                        if selected + 1 < routes.len() {
                             selected += 1;
                         }
                     }
@@ -191,18 +229,19 @@ fn select_port_tui(ports: &[u16]) -> io::Result<Option<u16>> {
     result
 }
 
-fn draw_selection(out: &mut impl Write, ports: &[u16], selected: usize) -> io::Result<()> {
+fn draw_selection(out: &mut impl Write, routes: &[PortRoute], selected: usize) -> io::Result<()> {
     let (_cols, rows) = size().unwrap_or((80, 24));
     queue!(out, Clear(ClearType::All), MoveTo(0, 0))?;
 
     queue!(out, Print("Select proxy route:\r\n"), Print("\r\n"))?;
 
-    for (i, port) in ports.iter().enumerate() {
+    for (i, route) in routes.iter().enumerate() {
         let prefix = if i == selected { "> " } else { "  " };
-        queue!(
-            out,
-            Print(format!("{prefix}127.0.0.1:{port}\r\n"))
-        )?;
+        let line = match &route.label {
+            Some(name) => format!("{prefix}{name} - 127.0.0.1:{port}\r\n", port = route.port),
+            None => format!("{prefix}127.0.0.1:{port}\r\n", port = route.port),
+        };
+        queue!(out, Print(line))?;
     }
 
     queue!(
