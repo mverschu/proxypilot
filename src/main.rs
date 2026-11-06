@@ -88,9 +88,10 @@ fn main() {
     let mut cmd = Command::new(&proxychains);
     cmd.stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .args(&args);
+        .stderr(Stdio::inherit());
+    // `-f` and the config path must come *before* the wrapped command (e.g. nxc), or the child gets them as its own argv.
     apply_proxychains_config(&mut cmd, &proxychains, &path);
+    cmd.args(&args);
 
     let status = cmd.status();
 

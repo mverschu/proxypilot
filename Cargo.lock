@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "proxypilot"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "crossterm",
  "tempfile",
