@@ -37,4 +37,6 @@ proxypilot nxc smb 192.168.1.10
 proxypilot nxc ldap 10.0.0.5 -u user -p pass
 ```
 
+<img width="470" height="148" alt="image" src="https://github.com/user-attachments/assets/665e5bfd-8b87-41c3-aa43-658eafeb6e9e" />
+
 One port in the file → it is used automatically. Several ports → pick one in the prompt (↑/↓, Enter, Esc to cancel).
