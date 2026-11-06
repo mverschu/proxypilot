@@ -36,14 +36,9 @@ cargo build --release
 
 Install the binary from `target/release/proxypilot` into your `PATH`.
 
-## Precompiled binary (Linux x86_64)
+## Precompiled binary (Linux)
 
-A release build for **Linux x86_64** (`x86_64-unknown-linux-gnu`) is checked in under `dist/`:
-
-- **`dist/proxypilot-x86_64-unknown-linux-gnu`** — executable  
-- **`dist/proxypilot-x86_64-unknown-linux-gnu.tar.gz`** — same file in a tarball  
-
-This binary is dynamically linked against **glibc** (typical on mainstream distros). Copy it somewhere on your `PATH` (for example `~/.local/bin/`) and ensure it is executable (`chmod +x`). For other targets, build from source with `cargo build --release`.
+Prebuilt **Linux x86_64** binaries are attached to [GitHub Releases](https://github.com/mverschu/proxypilot/releases) (look for `proxypilot-linux-x86_64` and `proxypilot-linux-x86_64.tar.gz`). They are dynamically linked against **glibc** (typical on mainstream distros). Copy the binary somewhere on your `PATH` (for example `~/.local/bin/proxypilot`) and ensure it is executable (`chmod +x`). For other targets, build from source with `cargo build --release`.
 
 ## Usage
 
