@@ -18,6 +18,14 @@ Override with:
 export PROXYPILOT_CONFIG=/path/to/ports
 ```
 
+Create or overwrite that file interactively:
+
+```bash
+proxypilot init
+```
+
+You are prompted for each SOCKS port (127.0.0.1 is always used) and an optional label; finish with a blank port line. If the file already exists, you are asked before overwriting.
+
 File format: one route per line (empty lines and `#` comments allowed):
 
 ```text
@@ -47,6 +55,7 @@ Prebuilt **Linux x86_64** binaries are attached to [GitHub Releases](https://git
 ## Usage
 
 ```bash
+proxypilot init
 proxypilot nxc smb 192.168.1.10
 proxypilot nxc smb 192.168.1.10 -u alice -p secret
 ```

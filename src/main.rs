@@ -3,7 +3,7 @@
 
 use std::env;
 use std::fs;
-use std::io::{self, stdout, Write};
+use std::io::{self, stdin, stdout, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 
@@ -26,9 +26,16 @@ struct PortRoute {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("Usage: proxypilot <command> [args...]");
-        eprintln!("Example: proxypilot nxc smb 192.168.1.1 -u user -p pass");
+        print_usage();
         process::exit(2);
+    }
+
+    if args[0] == "init" {
+        if args.len() != 1 {
+            eprintln!("Usage: proxypilot init");
+            process::exit(2);
+        }
+        process::exit(run_init());
     }
 
     let config_path = match resolve_config_path() {
@@ -94,6 +101,131 @@ fn main() {
             process::exit(1);
         }
     }
+}
+
+fn print_usage() {
+    eprintln!("Usage:");
+    eprintln!("  proxypilot init              Create ~/.config/proxypilot/ports interactively");
+    eprintln!("  proxypilot <command> [args]  Run via proxychains4 through a chosen SOCKS port");
+    eprintln!("Example: proxypilot nxc smb 192.168.1.1 -u user -p pass");
+}
+
+/// Interactive setup: write the ports file (same path as normal operation).
+fn run_init() -> i32 {
+    let config_path = match resolve_config_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("proxypilot: {e}");
+            return 2;
+        }
+    };
+
+    println!("proxypilot init — create SOCKS port config\n");
+    println!("File: {}", config_path.display());
+
+    match fs::metadata(&config_path) {
+        Ok(m) if m.is_file() => {
+            print!("This file already exists. Overwrite? [y/N]: ");
+            let _ = stdout().flush();
+            let mut line = String::new();
+            if stdin().read_line(&mut line).is_err() {
+                return 1;
+            }
+            let a = line.trim().to_ascii_lowercase();
+            if a != "y" && a != "yes" {
+                println!("Aborted.");
+                return 0;
+            }
+        }
+        Ok(_) => {
+            eprintln!("proxypilot: path exists but is not a file: {}", config_path.display());
+            return 1;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("proxypilot: cannot access {}: {e}", config_path.display());
+            return 1;
+        }
+    }
+
+    let stdin = stdin();
+    let mut reader = stdin.lock();
+
+    println!("\nAdd one SOCKS port per entry (127.0.0.1 will be used). Empty port when done.\n");
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut n: u32 = 1;
+    loop {
+        print!("Port [{n}] (e.g. 1080, blank to finish): ");
+        let _ = stdout().flush();
+        let mut port_line = String::new();
+        if reader.read_line(&mut port_line).is_err() {
+            return 1;
+        }
+        let port_line = port_line.trim();
+        if port_line.is_empty() {
+            if lines.is_empty() {
+                eprintln!("proxypilot: add at least one port.");
+                return 2;
+            }
+            break;
+        }
+        let port: u16 = match port_line.parse() {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("proxypilot: invalid port: {port_line:?}");
+                return 2;
+            }
+        };
+
+        print!("     Label (optional; leave empty for port only): ");
+        let _ = stdout().flush();
+        let mut label_line = String::new();
+        if reader.read_line(&mut label_line).is_err() {
+            return 1;
+        }
+        let label = label_line.trim();
+        lines.push(format_config_line(label, port));
+        n += 1;
+    }
+
+    if let Some(parent) = config_path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("proxypilot: cannot create {}: {e}", parent.display());
+            return 1;
+        }
+    }
+
+    let content = build_ports_file_content(&lines);
+    if let Err(e) = fs::write(&config_path, content) {
+        eprintln!("proxypilot: cannot write {}: {e}", config_path.display());
+        return 1;
+    }
+
+    println!("\nWrote {}.", config_path.display());
+    0
+}
+
+fn format_config_line(label: &str, port: u16) -> String {
+    let label = label.trim();
+    if label.is_empty() {
+        return format!("{port}");
+    }
+    if label.contains(':') {
+        format!("[{label}]:{port}")
+    } else {
+        format!("{label}:{port}")
+    }
+}
+
+fn build_ports_file_content(lines: &[String]) -> String {
+    let mut s = String::from("# proxypilot — local SOCKS ports (one per line)\n");
+    s.push_str("# Plain port, or Label:port / [Label with : colon]:port\n\n");
+    for line in lines {
+        s.push_str(line);
+        s.push('\n');
+    }
+    s
 }
 
 fn resolve_config_path() -> Result<PathBuf, String> {
