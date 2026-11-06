@@ -1,5 +1,5 @@
 //! proxypilot: select a local SOCKS port from config, write a temporary proxychains
-//! configuration, and run `proxychains4 -f <config> <your-command>` with all args forwarded.
+//! configuration, and run `proxychains(-ng) -f <config> <your-command>` with all args forwarded.
 
 use std::env;
 use std::fs;
@@ -7,14 +7,11 @@ use std::io::{self, stdin, stdout, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::{MoveToColumn, MoveUp};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::style::Print;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, size, Clear, ClearType, EnterAlternateScreen,
-    LeaveAlternateScreen,
-};
-use crossterm::{execute, queue};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
+use crossterm::queue;
 use tempfile::NamedTempFile;
 
 /// One SOCKS route from the config file (port plus optional display label).
@@ -80,7 +77,15 @@ fn main() {
     };
 
     let path = temp_config.path().to_path_buf();
-    let status = Command::new("proxychains4")
+    let proxychains = match resolve_proxychains_bin() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("proxypilot: {e}");
+            process::exit(1);
+        }
+    };
+
+    let status = Command::new(&proxychains)
         .arg("-f")
         .arg(&path)
         .args(&args)
@@ -97,7 +102,7 @@ fn main() {
             process::exit(s.code().unwrap_or(1));
         }
         Err(e) => {
-            eprintln!("proxypilot: failed to run proxychains4: {e}");
+            eprintln!("proxypilot: failed to run {}: {e}", proxychains.display());
             process::exit(1);
         }
     }
@@ -106,7 +111,7 @@ fn main() {
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  proxypilot init              Create ~/.config/proxypilot/ports interactively");
-    eprintln!("  proxypilot <command> [args]  Run via proxychains4 through a chosen SOCKS port");
+    eprintln!("  proxypilot <command> [args]  Run via proxychains through a chosen SOCKS port");
     eprintln!("Example: proxypilot nxc smb 192.168.1.1 -u user -p pass");
 }
 
@@ -241,6 +246,50 @@ fn resolve_config_path() -> Result<PathBuf, String> {
     Ok(config_home.join("proxypilot").join("ports"))
 }
 
+/// `proxychains4` first, then `proxychains`; override with `PROXYCHAINS_BIN` (path or name on `PATH`).
+fn resolve_proxychains_bin() -> Result<PathBuf, String> {
+    if let Ok(v) = env::var("PROXYCHAINS_BIN") {
+        let v = v.trim();
+        if v.is_empty() {
+            return Err("PROXYCHAINS_BIN is empty".into());
+        }
+        let p = PathBuf::from(v);
+        if p.is_file() {
+            return Ok(p);
+        }
+        if let Some(found) = find_executable_in_path(Path::new(v)) {
+            return Ok(found);
+        }
+        return Err(format!(
+            "PROXYCHAINS_BIN={v:?} is not a file and was not found on PATH"
+        ));
+    }
+    for name in ["proxychains4", "proxychains"] {
+        if let Some(p) = find_executable_in_path(Path::new(name)) {
+            return Ok(p);
+        }
+    }
+    Err(
+        "neither 'proxychains4' nor 'proxychains' found in PATH; install proxychains or set PROXYCHAINS_BIN=/path/to/binary"
+            .into(),
+    )
+}
+
+fn find_executable_in_path(program: &Path) -> Option<PathBuf> {
+    if program.is_absolute() || program.components().count() > 1 {
+        return program.is_file().then(|| program.to_path_buf());
+    }
+    let name = program.file_name()?;
+    let path_var = env::var_os("PATH")?;
+    for dir in env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn load_routes(path: &Path) -> Result<Vec<PortRoute>, String> {
     let content = fs::read_to_string(path).map_err(|e| {
         format!(
@@ -318,18 +367,12 @@ socks5 127.0.0.1 {port}
 
 fn select_port_tui(routes: &[PortRoute]) -> io::Result<Option<u16>> {
     let mut selected: usize = 0;
-
     enable_raw_mode()?;
     let mut out = stdout();
-    if let Err(e) = execute!(out, EnterAlternateScreen, Hide) {
-        let _ = disable_raw_mode();
-        return Err(e);
-    }
 
     let result = (|| -> io::Result<Option<u16>> {
+        paint_picker_lines(&mut out, routes, selected, false)?;
         loop {
-            draw_selection(&mut out, routes, selected)?;
-
             if !event::poll(std::time::Duration::from_millis(250))? {
                 continue;
             }
@@ -340,48 +383,70 @@ fn select_port_tui(routes: &[PortRoute]) -> io::Result<Option<u16>> {
                     KeyCode::Up | KeyCode::Char('k') => {
                         if selected > 0 {
                             selected -= 1;
+                            paint_picker_lines(&mut out, routes, selected, true)?;
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         if selected + 1 < routes.len() {
                             selected += 1;
+                            paint_picker_lines(&mut out, routes, selected, true)?;
                         }
                     }
                     _ => {}
                 },
-                Event::Resize(_, _) => {}
+                Event::Resize(_, _) => {
+                    paint_picker_lines(&mut out, routes, selected, true)?;
+                }
                 _ => {}
             }
         }
     })();
 
-    let _ = execute!(out, Show, LeaveAlternateScreen);
     let _ = disable_raw_mode();
+    let _ = writeln!(out);
 
     result
 }
 
-fn draw_selection(out: &mut impl Write, routes: &[PortRoute], selected: usize) -> io::Result<()> {
-    let (_cols, rows) = size().unwrap_or((80, 24));
-    queue!(out, Clear(ClearType::All), MoveTo(0, 0))?;
+/// Small picker in the main terminal buffer (not an alternate/fullscreen view).
+fn paint_picker_lines(
+    out: &mut impl Write,
+    routes: &[PortRoute],
+    selected: usize,
+    move_up: bool,
+) -> io::Result<()> {
+    // From the hint line, move up past title + blank + routes = routes.len() + 2 lines.
+    let lines_above_hint = routes.len().saturating_add(2);
+    let up_by: u16 = lines_above_hint.try_into().unwrap_or(u16::MAX);
+    if move_up {
+        queue!(out, MoveUp(up_by))?;
+    }
+    queue!(out, MoveToColumn(0))?;
 
-    queue!(out, Print("Select proxy route:\r\n"), Print("\r\n"))?;
+    paint_picker_row(out, "Select proxy route:")?;
+    paint_picker_row(out, "")?;
 
     for (i, route) in routes.iter().enumerate() {
         let prefix = if i == selected { "> " } else { "  " };
-        let line = match &route.label {
-            Some(name) => format!("{prefix}{name} - 127.0.0.1:{port}\r\n", port = route.port),
-            None => format!("{prefix}127.0.0.1:{port}\r\n", port = route.port),
+        let row = match &route.label {
+            Some(name) => format!("{prefix}{name} - 127.0.0.1:{}", route.port),
+            None => format!("{prefix}127.0.0.1:{}", route.port),
         };
-        queue!(out, Print(line))?;
+        paint_picker_row(out, &row)?;
     }
 
+    paint_picker_row(out, "↑/↓: move  Enter: confirm  Esc: cancel")?;
+    out.flush()?;
+    Ok(())
+}
+
+fn paint_picker_row(out: &mut impl Write, s: &str) -> io::Result<()> {
     queue!(
         out,
-        MoveTo(0, rows.saturating_sub(1)),
-        Print("↑/↓: move  Enter: confirm  Esc: cancel"),
+        MoveToColumn(0),
+        Clear(ClearType::UntilNewLine),
+        Print(s),
+        Print("\r\n"),
     )?;
-
-    out.flush()?;
     Ok(())
 }

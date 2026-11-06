@@ -1,9 +1,15 @@
 # proxypilot
 
-Wrapper around **proxychains4**: reads local SOCKS proxy ports from a config file, optionally lets you pick one in a small TUI, writes a **temporary** proxychains configuration, and runs:
+Wrapper around **proxychains** (see below for the binary name): reads local SOCKS proxy ports from a config file, optionally lets you pick one in a small inline TUI (same terminal scrollback, not a fullscreen alternate screen), writes a **temporary** proxychains configuration, and runs:
 
 ```text
 proxychains4 -f <temporary-config> <your-command> [args...]
+```
+
+Proxypilot looks for **`proxychains4` first**, then **`proxychains`**, on your `PATH`. Override the executable with:
+
+```bash
+export PROXYCHAINS_BIN=/usr/bin/proxychains
 ```
 
 All arguments after `proxypilot` are forwarded unchanged. The child process’s exit code is returned. The temporary file is removed after the command finishes; nothing under `/etc/proxychains.conf` is modified.
@@ -60,4 +66,4 @@ proxypilot nxc smb 192.168.1.10
 proxypilot nxc smb 192.168.1.10 -u alice -p secret
 ```
 
-Requires `proxychains4` and the wrapped command (e.g. `nxc`) on `PATH`.
+Requires **proxychains** (`proxychains4` or `proxychains`) and the wrapped command (e.g. `nxc`) on `PATH`, unless `PROXYCHAINS_BIN` is set.
