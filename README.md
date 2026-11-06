@@ -6,10 +6,12 @@ Wrapper around **proxychains** (see below for the binary name): reads local SOCK
 proxychains4 -f <temporary-config> <your-command> [args...]
 ```
 
-Proxypilot looks for **`proxychains4` first**, then **`proxychains`**, on your `PATH`. Override the executable with:
+Proxypilot needs **proxychains-ng** (the `proxychains4` program, sometimes also named `proxychains`). It looks for **`proxychains4` on `PATH` first**, then **`proxychains`** only if that file is **not** the old **ProxyChains 3.x** shell script (that version has no `-f` and causes errors like `exec: -f: not found`). Install the **`proxychains` / `proxychains-ng`** package so `proxychains4` exists.
+
+Override which binary to run:
 
 ```bash
-export PROXYCHAINS_BIN=/usr/bin/proxychains
+export PROXYCHAINS_BIN=/usr/bin/proxychains4
 ```
 
 All arguments after `proxypilot` are forwarded unchanged. The child process’s exit code is returned. The temporary file is removed after the command finishes; nothing under `/etc/proxychains.conf` is modified.
@@ -66,4 +68,4 @@ proxypilot nxc smb 192.168.1.10
 proxypilot nxc smb 192.168.1.10 -u alice -p secret
 ```
 
-Requires **proxychains** (`proxychains4` or `proxychains`) and the wrapped command (e.g. `nxc`) on `PATH`, unless `PROXYCHAINS_BIN` is set.
+Requires **proxychains-ng** (`proxychains4` on `PATH`, or a compatible `proxychains` that is not legacy v3) and the wrapped command (e.g. `nxc`), unless `PROXYCHAINS_BIN` is set to the ng binary.

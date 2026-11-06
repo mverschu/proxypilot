@@ -2,8 +2,8 @@
 //! configuration, and run `proxychains(-ng) -f <config> <your-command>` with all args forwarded.
 
 use std::env;
-use std::fs;
-use std::io::{self, stdin, stdout, BufRead, Write};
+use std::fs::{self, File};
+use std::io::{self, Read, stdin, stdout, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 
@@ -85,14 +85,14 @@ fn main() {
         }
     };
 
-    let status = Command::new(&proxychains)
-        .arg("-f")
-        .arg(&path)
-        .args(&args)
-        .stdin(Stdio::inherit())
+    let mut cmd = Command::new(&proxychains);
+    cmd.stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status();
+        .args(&args);
+    apply_proxychains_config(&mut cmd, &proxychains, &path);
+
+    let status = cmd.status();
 
     // Deletes the tempfile when dropped.
     drop(temp_config);
@@ -246,33 +246,102 @@ fn resolve_config_path() -> Result<PathBuf, String> {
     Ok(config_home.join("proxypilot").join("ports"))
 }
 
-/// `proxychains4` first, then `proxychains`; override with `PROXYCHAINS_BIN` (path or name on `PATH`).
+/// Resolves proxychains-ng (supports `-f`). Skips legacy **ProxyChains 3.x** `/usr/bin/proxychains`
+/// shell scripts — they do not accept `-f` (your `exec: -f: not found` error).
+///
+/// Order: `PROXYCHAINS_BIN` if set, else `proxychains4` on `PATH`, else `proxychains` only when it
+/// is not the legacy v3 script (ELF ng binary or known-good wrapper).
 fn resolve_proxychains_bin() -> Result<PathBuf, String> {
     if let Ok(v) = env::var("PROXYCHAINS_BIN") {
         let v = v.trim();
         if v.is_empty() {
             return Err("PROXYCHAINS_BIN is empty".into());
         }
-        let p = PathBuf::from(v);
-        if p.is_file() {
-            return Ok(p);
+        let p = if Path::new(v).is_absolute() {
+            PathBuf::from(v)
+        } else {
+            find_executable_in_path(Path::new(v)).ok_or_else(|| {
+                format!("PROXYCHAINS_BIN={v:?} not found on PATH or not executable")
+            })?
+        };
+        if !p.is_file() {
+            return Err(format!("PROXYCHAINS_BIN is not a file: {}", p.display()));
         }
-        if let Some(found) = find_executable_in_path(Path::new(v)) {
-            return Ok(found);
+        if is_legacy_proxychains3_script(&p) {
+            return Err(format!(
+                "{} is legacy ProxyChains 3.x (no -f support); install proxychains-ng and use `proxychains4`, or point PROXYCHAINS_BIN at the ng binary",
+                p.display()
+            ));
         }
-        return Err(format!(
-            "PROXYCHAINS_BIN={v:?} is not a file and was not found on PATH"
-        ));
+        return Ok(p);
     }
-    for name in ["proxychains4", "proxychains"] {
-        if let Some(p) = find_executable_in_path(Path::new(name)) {
-            return Ok(p);
+    if let Some(p) = find_executable_in_path(Path::new("proxychains4")) {
+        return Ok(p);
+    }
+    if let Some(p) = find_executable_in_path(Path::new("proxychains")) {
+        if is_legacy_proxychains3_script(&p) {
+            return Err(
+                "found only `proxychains` from ProxyChains 3.x (no `-f`); install proxychains-ng (`proxychains4` on PATH) or set PROXYCHAINS_BIN=/path/to/proxychains4"
+                    .into(),
+            );
         }
+        return Ok(p);
     }
     Err(
-        "neither 'proxychains4' nor 'proxychains' found in PATH; install proxychains or set PROXYCHAINS_BIN=/path/to/binary"
+        "proxychains-ng not found: install `proxychains4` on PATH or set PROXYCHAINS_BIN to its full path (legacy ProxyChains 3 `proxychains` is not supported)"
             .into(),
     )
+}
+
+/// `-f` is supported by proxychains-ng. Legacy v3 scripts reject it.
+fn apply_proxychains_config(cmd: &mut Command, proxychains_bin: &Path, config_path: &Path) {
+    if accepts_proxychains_f_flag(proxychains_bin) {
+        cmd.arg("-f").arg(config_path);
+    } else {
+        // e.g. some distro wrappers delegate to ldpreload without parsing -f
+        cmd.env("PROXYCHAINS_CONF_FILE", config_path);
+    }
+}
+
+fn accepts_proxychains_f_flag(proxychains_bin: &Path) -> bool {
+    if file_starts_with_elf_magic(proxychains_bin) {
+        return true;
+    }
+    if is_legacy_proxychains3_script(proxychains_bin) {
+        return false;
+    }
+    // proxychains-ng shell wrapper: still forwards `-f` (unlike legacy v3 scripts).
+    true
+}
+
+fn file_starts_with_elf_magic(path: &Path) -> bool {
+    let mut buf = [0u8; 4];
+    let Ok(n) = File::open(path).and_then(|mut f| f.read(&mut buf)) else {
+        return false;
+    };
+    n >= 4 && buf == [0x7F, b'E', b'L', b'F']
+}
+
+fn is_legacy_proxychains3_script(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() || file_starts_with_elf_magic(path) {
+        return false;
+    }
+    let mut f = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut buf = [0u8; 4096];
+    let Ok(n) = f.read(&mut buf) else {
+        return false;
+    };
+    let sample = String::from_utf8_lossy(&buf[..n]);
+    let lower = sample.to_ascii_lowercase();
+    lower.contains("proxychains-3")
+        || lower.contains("proxychains.sf.net")
+        || (sample.contains("LD_PRELOAD") && sample.contains("ProxyChains"))
 }
 
 fn find_executable_in_path(program: &Path) -> Option<PathBuf> {
