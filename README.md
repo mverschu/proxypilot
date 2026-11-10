@@ -37,7 +37,10 @@ proxypilot init
 ```bash
 proxypilot nxc smb 192.168.1.10
 proxypilot nxc ldap 10.0.0.5 -u user -p pass
+proxypilot sudo nmap -sT -Pn -n -vv
 ```
+
+Privileged tools (e.g. some `nmap` scans) can be run as `proxypilot sudo …` instead of `sudo proxypilot …`. When the wrapped command is `sudo`, proxypilot adds `--preserve-env=LD_PRELOAD` (and `-E` if needed) so proxychains-ng still hooks the process `sudo` runs. Set `PROXYPILOT_NO_SUDO_WRAP=1` to pass `sudo` arguments through unchanged.
 
 <img width="470" height="148" alt="image" src="https://github.com/user-attachments/assets/665e5bfd-8b87-41c3-aa43-658eafeb6e9e" />
 

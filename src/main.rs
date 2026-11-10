@@ -99,7 +99,8 @@ fn main() {
     }
     // `-f` and the config path must come *before* the wrapped command (e.g. nxc), or the child gets them as its own argv.
     apply_proxychains_config(&mut cmd, &proxychains, &path);
-    cmd.args(&args);
+    let wrapped_args = prepare_wrapped_command_args(&args);
+    cmd.args(&wrapped_args);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -160,6 +161,77 @@ fn print_usage() {
     eprintln!("  proxypilot init              Create ~/.config/proxypilot/ports interactively");
     eprintln!("  proxypilot <command> [args]  Run via proxychains through a chosen SOCKS port");
     eprintln!("Example: proxypilot nxc smb 192.168.1.1 -u user -p pass");
+    eprintln!("         proxypilot sudo nmap -sT -Pn -n -vv");
+}
+
+/// When the wrapped command is `sudo`, ensure proxychains' `LD_PRELOAD` is preserved for the
+/// command `sudo` runs (default sudo resets it). Set `PROXYPILOT_NO_SUDO_WRAP=1` to pass args through unchanged.
+fn prepare_wrapped_command_args(args: &[String]) -> Vec<String> {
+    if args.is_empty() || !is_sudo_program(&args[0]) {
+        return args.to_vec();
+    }
+    if env::var("PROXYPILOT_NO_SUDO_WRAP")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return args.to_vec();
+    }
+    if sudo_preserves_ld_preload(&args[1..]) {
+        return args.to_vec();
+    }
+    let mut out = Vec::with_capacity(args.len() + 2);
+    out.push(args[0].clone());
+    out.push("--preserve-env=LD_PRELOAD".to_string());
+    if !sudo_has_preserve_environment_flag(&args[1..]) {
+        out.push("-E".to_string());
+    }
+    out.extend_from_slice(&args[1..]);
+    out
+}
+
+fn is_sudo_program(argv0: &str) -> bool {
+    Path::new(argv0)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n == "sudo")
+        .unwrap_or(false)
+}
+
+/// True if the user already asked sudo to keep enough environment for proxychains.
+fn sudo_preserves_ld_preload(sudo_args: &[String]) -> bool {
+    for arg in sudo_args {
+        if arg == "--" {
+            break;
+        }
+        if arg == "-E" {
+            return true;
+        }
+        if arg.len() > 2 && arg.starts_with("-E") {
+            return true;
+        }
+        if arg == "--preserve-env" {
+            return true;
+        }
+        if let Some(rest) = arg.strip_prefix("--preserve-env=") {
+            if rest.is_empty() || env_list_includes_var(rest, "LD_PRELOAD") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn sudo_has_preserve_environment_flag(sudo_args: &[String]) -> bool {
+    sudo_args.iter().any(|arg| {
+        arg == "-E"
+            || (arg.len() > 2 && arg.starts_with("-E"))
+            || arg == "--preserve-env"
+            || arg.starts_with("--preserve-env=")
+    })
+}
+
+fn env_list_includes_var(list: &str, var: &str) -> bool {
+    list.split(',').any(|part| part.trim() == var)
 }
 
 /// Interactive setup: write the ports file (same path as normal operation).
@@ -628,4 +700,41 @@ fn paint_picker_hint_row(out: &mut impl Write) -> io::Result<()> {
         ResetColor,
         Print("\r\n"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sudo_wrap_injects_preserve_ld_preload() {
+        let args = vec![
+            "sudo".into(),
+            "nmap".into(),
+            "-sT".into(),
+        ];
+        let out = prepare_wrapped_command_args(&args);
+        assert_eq!(
+            out,
+            vec![
+                "sudo".to_string(),
+                "--preserve-env=LD_PRELOAD".to_string(),
+                "-E".to_string(),
+                "nmap".to_string(),
+                "-sT".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn sudo_wrap_skips_when_user_uses_dash_e() {
+        let args = vec!["sudo".into(), "-E".into(), "nmap".into()];
+        assert_eq!(prepare_wrapped_command_args(&args), args);
+    }
+
+    #[test]
+    fn non_sudo_command_unchanged() {
+        let args = vec!["nmap".into(), "-sT".into()];
+        assert_eq!(prepare_wrapped_command_args(&args), args);
+    }
 }
